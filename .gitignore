@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# 个人扫描材料(严禁入库)
+扫描件/
+*.pdf
+
+# 调试截图
+*.png
+!app/icon_1024.png
+
+# 测试/会话产物
+.playwright-mcp/
+.omc/
+.context/
+work/__pycache__/
+__pycache__/
+
+# 构建产物(可由脚本重建)
+dist/
+app/build/
+app/dist/
+work/ocr_bin
+
+# 开发模式的输入/输出目录
+work/input/
+work/output*/

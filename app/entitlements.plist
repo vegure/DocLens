@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime 下 OpenCV/PyInstaller 需要的宽松项 -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- PyInstaller onedir 的启动器会动态加载 _internal 下的 .so -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- JIT 不需要; AllowJIT 是 unsigned-executable-memory 的子集场景 -->
+</dict>
+</plist>

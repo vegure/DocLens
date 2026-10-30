@@ -1,0 +1,1463 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>DocLens — 文档扫描</title>
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d30; --line:#3a3d42; --txt:#dfe1e5;
+          --acc:#4cc2ff; --acc2:#ffd60a; --danger:#ff6b6b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font:13px/1.5 -apple-system,"PingFang SC",sans-serif;
+         height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; align-items:center; gap:12px; padding:8px 14px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; font-weight:600; }
+  header .logo { color:var(--acc); font-weight:700; }
+  header .spacer { flex:1; }
+  main { flex:1; display:flex; min-height:0; }
+  /* 左侧缩略图栏 */
+  #sidebar { width:120px; background:var(--panel); border-right:1px solid var(--line);
+             overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:8px; }
+  #btnAdd { margin-bottom:4px; background:#393c41; border:1px dashed var(--acc);
+            color:var(--acc); font-weight:600; }
+  #btnAdd:hover { background:#2e4a5a; }
+  .dirrow { display:flex; align-items:center; gap:4px; }
+  .dirrow .dirpath { flex:1; font-size:10px; color:#a9adb3; overflow:hidden;
+                     text-overflow:ellipsis; white-space:nowrap; direction:rtl;
+                     text-align:left; }
+  .thumb { border:2px solid transparent; border-radius:6px; overflow:hidden; cursor:pointer;
+           position:relative; background:#000; }
+  .thumb img { width:100%; display:block; }
+  .thumb.active { border-color:var(--acc); }
+  .thumb .done { position:absolute; top:4px; right:4px; background:#30d158; color:#000;
+                 border-radius:50%; width:16px; height:16px; font-size:11px; line-height:16px;
+                 text-align:center; font-weight:700; }
+  /* 画布区 */
+  #stage { flex:1; position:relative; min-width:0; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  /* 视图工具条(画布左下角悬浮) */
+  #viewBar { position:absolute; left:12px; bottom:12px; display:flex; gap:4px;
+             background:rgba(43,45,48,.88); border:1px solid var(--line); border-radius:8px;
+             padding:4px; z-index:5; }
+  #viewBar button { padding:4px 9px; font-size:13px; line-height:1; }
+  #viewBar .zoomval { min-width:44px; text-align:center; font-size:11px; color:var(--acc2);
+                      font-variant-numeric:tabular-nums; align-self:center; }
+  #hint { position:absolute; left:50%; top:14px; transform:translateX(-50%);
+          background:rgba(0,0,0,.65); padding:4px 14px; border-radius:14px; font-size:12px;
+          pointer-events:none; white-space:nowrap; }
+  /* 右侧控制面板 */
+  #panel { width:270px; background:var(--panel); border-left:1px solid var(--line);
+           overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  .sec { border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .sec h3 { font-size:12px; color:var(--acc); margin-bottom:8px; font-weight:600; }
+  button { background:#393c41; color:var(--txt); border:1px solid var(--line);
+           border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px; }
+  button:hover { background:#4a4e55; }
+  button.primary { background:var(--acc); color:#000; border-color:var(--acc); font-weight:600; }
+  button.primary:hover { background:#6ecfff; }
+  button.warn { background:var(--danger); color:#fff; border-color:var(--danger); }
+  button:disabled { opacity:.45; cursor:default; }
+  select, input[type=number] { background:#393c41; color:var(--txt); border:1px solid var(--line);
+           border-radius:4px; padding:4px 6px; font-size:12px; }
+  .row { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .row:last-child { margin-bottom:0; }
+  .row label { flex:0 0 58px; color:#a9adb3; font-size:12px; }
+  .row input[type=range] { flex:1; min-width:0; accent-color:var(--acc); height:22px; }
+  .row .val { flex:0 0 auto; min-width:38px; padding-left:4px; text-align:right;
+              font-variant-numeric:tabular-nums; color:var(--acc2); white-space:nowrap; }
+  /* 补边区标签是单字(上/下/左/右): 收窄给滑杆让位, 否则滑杆 min-content
+     宽挤得 .val 悬到 .sec 卡片外 */
+  #panel .sec .row label.single { flex-basis:30px; }
+  .toggle { display:flex; gap:6px; }
+  .toggle button { flex:1; }
+  .toggle button.on { background:var(--acc); color:#000; border-color:var(--acc); font-weight:600; }
+  /* 旋转行 4 键最挤: 压缩内距/字号防止 270° 被面板裁掉 */
+  #rotToggle { gap:4px; }
+  #rotToggle button { padding:6px 2px; font-size:11.5px; white-space:nowrap; }
+  #previewWrap { background:#000; border-radius:6px; overflow:hidden; position:relative; }
+  #previewWrap img { width:100%; display:block; cursor:zoom-in; }
+  #previewWrap::after { content:'点击放大'; position:absolute; right:6px; bottom:6px;
+    background:rgba(0,0,0,.55); color:#dfe1e5; font-size:11px; padding:2px 8px;
+    border-radius:10px; pointer-events:none; }
+  /* 灯箱放大 */
+  #lightbox { position:fixed; inset:0; background:rgba(0,0,0,.88); z-index:100;
+              display:none; }
+  #lightbox.open { display:block; }
+  #lightbox canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  #lightbox .bar { position:absolute; top:12px; left:50%; transform:translateX(-50%);
+                   display:flex; gap:8px; z-index:101; }
+  #lightbox .bar button { background:rgba(42,44,48,.9); }
+  #lightbox .zoomval { background:rgba(42,44,48,.9); border:1px solid var(--line);
+                       border-radius:6px; padding:6px 10px; font-size:12px;
+                       color:var(--acc2); min-width:52px; text-align:center; }
+  #status { padding:6px 10px; background:var(--panel); border-top:1px solid var(--line);
+            font-size:12px; color:#a9adb3; white-space:nowrap; overflow-x:auto; }
+  .ok { color:#30d158; } .err { color:var(--danger); }
+  /* 模态弹窗: 阻塞式(遮罩挡住下层操作), 用于保存/导出/撤销等结果提示 */
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200;
+           display:none; align-items:center; justify-content:center; }
+  #modal.open { display:flex; }
+  #modal .card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+                 padding:20px 22px; width:340px; max-width:90vw; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  #modal.wide .card { width:520px; }
+  #modal .m-title { font-size:14px; font-weight:600; margin-bottom:10px; color:var(--txt); }
+  #modal.err .m-title { color:var(--danger); }
+  #modal .m-body { font-size:12.5px; color:#c9cdd4; line-height:1.6; margin-bottom:16px;
+                   max-height:50vh; overflow:auto; word-break:break-all; }
+  #modal .m-sub { font-size:11px; color:#a9adb3; margin-top:6px; }
+  #modal .m-path { font-family:ui-monospace,Menlo,monospace; font-size:11.5px;
+                   color:var(--acc); background:rgba(76,194,255,.08); padding:6px 8px;
+                   border-radius:6px; word-break:break-all; }
+  #modal .m-ocr { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; white-space:pre-wrap;
+                  color:var(--txt); background:#1e1f22; border:1px solid var(--line);
+                  border-radius:6px; padding:10px; max-height:44vh; overflow:auto;
+                  user-select:text; -webkit-user-select:text; }
+  #modal .m-btns { display:flex; gap:8px; justify-content:flex-end; }
+  /* 项目管理弹窗内嵌列表 */
+  #modal .m-proj { display:flex; flex-direction:column; gap:6px; }
+  #modal .m-proj .pitem { display:flex; align-items:center; gap:8px;
+                           background:#232528; border:1px solid var(--line);
+                           border-radius:8px; padding:8px 10px; }
+  #modal .m-proj .pitem.cur { border-color:var(--acc); background:rgba(76,194,255,.08); }
+  #modal .m-proj .pname { flex:1; font-size:13px; cursor:pointer; overflow:hidden;
+                          text-overflow:ellipsis; white-space:nowrap; }
+  #modal .m-proj .pmeta { font-size:10px; color:#8b9097; }
+  #modal .m-proj button { padding:3px 8px; font-size:11px; }
+  #modal .m-newrow { display:flex; gap:8px; margin-bottom:12px; }
+  #modal .m-newrow input { flex:1; background:#393c41; border:1px solid var(--line);
+                           border-radius:6px; color:var(--txt); padding:6px 8px;
+                           font-size:12px; }
+  header select { background:#393c41; color:var(--txt); border:1px solid var(--line);
+                  border-radius:6px; padding:5px 8px; font-size:12px; max-width:160px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">▸ DocLens</span><h1>文档扫描</h1>
+  <select id="projSelect" title="切换项目"></select>
+  <button id="btnProj" title="新建/重命名/删除项目">☰ 项目</button>
+  <span style="width:12px"></span>
+  <button id="btnDetect">⟳ 自动检测</button>
+  <button id="btnReset">↺ 重置</button>
+  <div class="spacer"></div>
+  <label style="font-size:12px"><input type="checkbox" id="cbOcr"> 保存时OCR</label>
+  <button id="btnSave" class="primary">✓ 本页就绪 →</button>
+  <button id="btnUnsave" title="撤销本页保存, 保留标注重新提取">↺ 撤销本页</button>
+  <button id="btnPdf" class="primary">⬇ 导出PDF…</button>
+</header>
+<main>
+  <div id="sidebar"><button id="btnAdd">＋ 添加照片</button></div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hint">拖动 ■ 角点 / ● 边控制点 调整轮廓 · 滚轮缩放 · 空格+拖动平移</div>
+    <div id="viewBar">
+      <button id="vbFit" title="适应窗口 (F)">⤢ 居中</button>
+      <button id="vbZoomOut" title="缩小 (-)">−</button>
+      <span class="zoomval" id="vbZoom">100%</span>
+      <button id="vbZoomIn" title="放大 (+)">＋</button>
+      <button id="vb100" title="原大 (1)">1:1</button>
+    </div>
+  </div>
+  <div id="panel">
+    <div class="sec">
+      <h3>模式</h3>
+      <div class="toggle" id="modeToggle">
+        <button data-m="corner" class="on">角点</button>
+        <button data-m="edge">边缘</button>
+      </div>
+      <div class="row" style="margin-top:8px"><span style="font-size:11px;color:#a9adb3" id="modeDesc">拖动四个角点框住文档</span></div>
+    </div>
+    <div class="sec">
+      <h3>补边 Pad(比例)</h3>
+      <div class="row"><label class="single">上</label><input type="range" id="padT" min="0" max="15" value="2" step="0.5"><span class="val" id="padTv">2%</span></div>
+      <div class="row"><label class="single">下</label><input type="range" id="padB" min="0" max="15" value="2" step="0.5"><span class="val" id="padBv">2%</span></div>
+      <div class="row"><label class="single">左</label><input type="range" id="padL" min="0" max="15" value="2" step="0.5"><span class="val" id="padLv">2%</span></div>
+      <div class="row"><label class="single">右</label><input type="range" id="padR" min="0" max="15" value="2" step="0.5"><span class="val" id="padRv">2%</span></div>
+    </div>
+    <div class="sec">
+      <h3>输出</h3>
+      <div class="row"><label>样式</label>
+        <div class="toggle" style="flex:1" id="styleToggle">
+          <button data-s="color" class="on">彩色</button>
+          <button data-s="gray">灰度</button>
+          <button data-s="bw">黑白</button>
+        </div>
+      </div>
+      <div class="row"><label>旋转</label>
+        <div class="toggle" style="flex:1" id="rotToggle">
+          <button data-r="0" class="on">0°</button>
+          <button data-r="90">90°</button>
+          <button data-r="180">180°</button>
+          <button data-r="270">270°</button>
+        </div>
+      </div>
+      <div class="row"><label>标签</label><input id="label" type="text" placeholder="页名(默认文件名)" style="flex:1;background:#393c41;border:1px solid var(--line);border-radius:4px;color:var(--txt);padding:4px 6px"></div>
+      <div class="row"><label>文档类型</label>
+        <select id="docType" style="flex:1" title="扫描对象的实际尺寸 — 按纸张排版导出时按 1:1 还原"></select></div>
+      <div class="row" id="docCustomRow" style="display:none"><label>尺寸mm</label>
+        <input id="docW" type="number" min="10" max="2000" step="0.1" placeholder="85.6" style="flex:1">
+        <span style="color:#a9adb3">×</span>
+        <input id="docH" type="number" min="10" max="2000" step="0.1" placeholder="54" style="flex:1"></div>
+      <div class="row"><label style="flex-basis:auto" title="PDF 导出的记忆位置">导出到</label>
+        <div class="dirrow" style="flex:1">
+          <span class="dirpath" id="saveDir" title="">…</span>
+          <button id="btnChooseDir" title="选择保存目录" style="padding:3px 7px">📁…</button>
+        </div>
+      </div>
+    </div>
+    <div class="sec">
+      <h3>预览</h3>
+      <div id="previewWrap"><img id="preview" alt="预览"></div>
+    </div>
+  </div>
+</main>
+<div id="status">就绪</div>
+<!-- 模态弹窗: 保存/导出/撤销结果提示(阻塞式) -->
+<div id="modal"><div class="card">
+  <div class="m-title"></div>
+  <div class="m-body"></div>
+  <div class="m-btns"></div>
+</div></div>
+<!-- 预览灯箱: 滚轮缩放 / 拖拽平移 / 双击复位 -->
+<div id="lightbox">
+  <canvas id="lbCv"></canvas>
+  <div class="bar">
+    <button id="lbZoomOut">−</button>
+    <span class="zoomval" id="lbZoomVal">100%</span>
+    <button id="lbZoomIn">＋</button>
+    <button id="lbFit">适应</button>
+    <button id="lb100">1:1</button>
+    <button id="lbClose">✕ 关闭</button>
+  </div>
+</div>
+<script>
+'use strict';
+// ---------- 状态 ----------
+const S = {
+  images: [], cur: -1,
+  corners: [],              // [TL,TR,BR,BL] 原图坐标
+  edges: null,              // {top,right,bottom,left: [[x,y],...]} 首尾=角点
+  mode: 'corner',           // corner | edge
+  style: 'color',
+  rot: 0,                   // 输出旋转(顺时针 0/90/180/270)
+  rots: {},                 // per-image 记忆 {imageId: deg}
+  pads: {t:2,b:2,l:2,r:2},   // 百分数(0-15), 与滑杆同单位; payload 发送时 /100
+  view: {x:0, y:0, scale:1},// 视口(平移缩放)
+  img: null,                // HTMLImageElement(显示图, 2200 宽)
+  fullW: 0, fullH: 0,       // 原图全分辨率尺寸
+  k: 1,                     // 原图宽 / 显示图宽 (坐标换算)
+  dragging: null,           // {type:'corner',i} | {type:'edge',edge,i}
+  spacePan: false, panLast: null,
+  done: new Set(),          // 已保存图片id
+  dirty: true,              // 预览待刷新
+  annos: {},                // 服务端持久化标注 {imgId: {...}}
+  ocrTexts: {},             // {imgId: ocr文本}
+  docType: 'A4', docW: null, docH: null,  // 扫描对象类型(排版导出按实际尺寸 1:1)
+  presets: {docs: [], papers: []},         // 尺寸预设(服务端 /api/presets)
+  exportCfg: null,                         // 上次导出配置(模式/纸张/边距, 服务端记忆)
+  undoStack: [],            // 拖拽撤销栈 [{corners,edges,mode}]
+  projects: [], curProj: null,  // 项目列表/当前项目id
+};
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const status = (msg, cls='') => { $('status').innerHTML = `<span class="${cls}">${msg}</span>`; };
+
+// ---------- 模态弹窗(阻塞式提示) ----------
+// opts: {title, html, kind:'err'|undefined, wide, buttons:[{text,primary,act}],
+//        onAct: 默认按钮(无自定义 act)点击后的回调}
+// 按钮 act 返回 false = 保持弹窗打开(如"查看OCR"跳到另一个弹窗前不关旧的视觉突兀),
+// 返回 true/undefined = 关闭后执行 onAct
+function showModal(opts) {
+  const m = $('modal');
+  m.classList.toggle('err', opts.kind==='err');
+  m.classList.toggle('wide', !!opts.wide);
+  m.querySelector('.m-title').textContent = opts.title || '提示';
+  m.querySelector('.m-body').innerHTML = opts.html || '';
+  const btns = m.querySelector('.m-btns');
+  btns.innerHTML = '';
+  const list = opts.buttons && opts.buttons.length ? opts.buttons : [{text:'好', primary:true}];
+  for (const b of list) {
+    const el = document.createElement('button');
+    el.textContent = b.text;
+    if (b.primary) el.className = 'primary';
+    el.onclick = ()=>{
+      const keep = b.act ? b.act() : undefined;   // false=不关闭
+      if (keep !== false) { m.classList.remove('open'); opts.onAct && opts.onAct(); }
+    };
+    btns.appendChild(el);
+  }
+  m.classList.add('open');
+}
+// 点遮罩=默认关闭(等同点默认按钮)
+$('modal').addEventListener('click', e=>{
+  if (e.target !== $('modal')) return;
+  $('modal').classList.remove('open');
+});
+
+// ---------- 项目 ----------
+// 切换/新建/删除项目后完整清空会话。
+// 此前只重置了状态对象, 有三处残留: 画布上旧项目的图(draw 无图时提前
+// return 不清屏)、预览图与标签输入框、以及在途的图片加载/自动检测回调
+// (loadGen 未失效, 旧响应回来还会把上一项目的角点写回状态)。
+function resetSessionUI() {
+  loadGen++;                     // 作废在途 selectImage / autoDetect 回调
+  previewSeq++;                  // 作废在途预览响应
+  clearTimeout(prevTimer);
+  S.cur = -1; S.corners = []; S.edges = null; S.img = null;
+  S.dragging = null; S.panLast = null; S.undoStack = [];
+  S.done = new Set(); S.annos = {}; S.ocrTexts = {};
+  S.rots = {};                   // 旋转记忆按图 id 存, 跨项目可能撞 id
+  const r = cv.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);   // 画布显式擦旧帧
+  document.querySelectorAll('.thumb').forEach(t=>t.remove());
+  $('preview').src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  $('label').value = '';
+  lb.classList.remove('open'); LB.img = null;
+  status('项目已切换');
+}
+async function loadProjects() {
+  const r = await fetch('/api/projects').then(r=>r.json());
+  S.projects = r.projects; S.curProj = r.current;
+  const sel = $('projSelect');
+  sel.innerHTML = '';
+  for (const p of S.projects) {
+    const o = document.createElement('option');
+    o.value = p.pid; o.textContent = p.name;
+    sel.appendChild(o);
+  }
+  sel.value = S.curProj;
+}
+
+// 切项目: 落盘当前标注 -> 通知后端切换 -> 重载全部数据
+async function switchProject(pid) {
+  if (pid === S.curProj) return;
+  if (S.cur>=0 && S.corners.length===4) persistAnno();  // 切走前保存
+  status('切换项目 …');
+  try {
+    await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({op:'switch', pid})}).then(r=>r.json());
+    resetSessionUI();
+    await loadProjects();
+    await loadAnnos();
+    await reloadImages(true);
+    refreshSaveDir();
+    const p = S.projects.find(x=>x.pid===pid);
+    showModal({title:'已切换项目', html:`当前项目: <b>${p?.name||pid}</b>`});
+  } catch(e){ showModal({title:'切换失败', html:String(e), kind:'err'}); }
+}
+
+$('projSelect').onchange = e=> switchProject(e.target.value);
+
+// 项目管理弹窗
+$('btnProj').onclick = ()=>{
+  const rows = S.projects.map(p=>`
+    <div class="pitem ${p.pid===S.curProj?'cur':''}" data-pid="${p.pid}">
+      <span class="pname" title="点击切换">${p.name}</span>
+      <span class="pmeta">${(p.created||'').slice(0,10)}</span>
+      <button class="pact-rename" title="重命名">✎</button>
+      <button class="pact-del" title="删除项目(含其照片记录/标注/扫描页)">🗑</button>
+    </div>`).join('');
+  showModal({
+    title: '项目管理', wide: true,
+    html: `<div class="m-newrow">
+             <input id="mNewName" placeholder="新项目名称" maxlength="30">
+             <button id="mNewBtn" class="primary">＋ 新建</button>
+           </div>
+           <div class="m-proj">${rows}</div>
+           <div class="m-sub" style="margin-top:10px">每个项目拥有独立的照片、标注与扫描页; PDF 导出只含当前项目的页</div>`,
+    buttons: [{text:'关闭', primary:true}],
+  });
+  // 新建
+  $('mNewBtn').onclick = async ()=>{
+    const name = $('mNewName').value.trim();
+    if (!name) { $('mNewName').focus(); return; }
+    if (S.cur>=0 && S.corners.length===4) persistAnno();
+    const r = await fetch('/api/projects', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({op:'create', name})}).then(r=>r.json());
+    if (r.error) { showModal({title:'新建失败', html:r.error, kind:'err'}); return; }
+    resetSessionUI();
+    await loadProjects(); await reloadImages(true);
+    $('modal').classList.remove('open');
+    showModal({title:'已创建并切换', html:`项目 <b>${name}</b> — 现在可以添加照片了`});
+  };
+  $('mNewName').onkeydown = e=>{ if (e.key==='Enter') $('mNewBtn').click(); };
+  // 列表行事件(切换/重命名/删除)
+  document.querySelector('#modal .m-proj').onclick = async e=>{
+    const item = e.target.closest('.pitem'); if (!item) return;
+    const pid = item.dataset.pid;
+    const p = S.projects.find(x=>x.pid===pid);
+    if (e.target.classList.contains('pact-rename')) {
+      const nn = prompt('项目新名称', p.name);   // 简单起见用系统 prompt
+      if (!nn || nn===p.name) return;
+      await fetch('/api/projects', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({op:'rename', pid, name:nn})});
+      await loadProjects(); $('btnProj').onclick();   // 刷新弹窗
+      return;
+    }
+    if (e.target.classList.contains('pact-del')) {
+      showModal({title:'删除项目?',
+        html:`将删除 <b>${p.name}</b> 及其照片记录、标注、扫描页缓存。<br>原始照片文件不受影响。此操作不可撤销。`,
+        buttons:[{text:'取消', primary:true},{text:'删除', act: async ()=>{
+          const r = await fetch('/api/projects', {method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({op:'delete', pid})}).then(r=>r.json());
+          if (r.error) { showModal({title:'删除失败', html:r.error, kind:'err'}); return true; }
+          if (pid === S.curProj) {   // 删的是当前项目 -> 后端已切到别的
+            resetSessionUI();
+            await loadProjects(); await loadAnnos(); await reloadImages(true);
+          } else await loadProjects();
+          $('btnProj').onclick();
+          return true;
+        }}]});
+      return;
+    }
+    // 点行体 = 切换
+    if (pid !== S.curProj) { $('modal').classList.remove('open'); switchProject(pid); }
+  };
+};
+
+// ---------- 初始化 ----------
+async function init() {
+  await loadPresets();   // 文档类型下拉需先于第一张图选择就绪
+  await loadProjects();
+  refreshSaveDir();
+  await loadAnnos();
+  await reloadImages();
+}
+
+// 尺寸预设(文档类型/纸张) — 后端统一定义, 前端仅拉取填充
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/presets').then(r=>r.json());
+    S.presets = r;
+    const sel = $('docType');
+    sel.innerHTML = '';
+    for (const d of r.docs) {
+      const o = document.createElement('option');
+      o.value = d.id; o.textContent = `${d.name} ${d.w}×${d.h}mm`;
+      sel.appendChild(o);
+    }
+    const c = document.createElement('option');
+    c.value = 'custom'; c.textContent = '自定义尺寸…';
+    sel.appendChild(c);
+  } catch(e) { console.warn('presets load fail', e); }
+}
+
+// 文档类型 UI 同步: 下拉值/自定义尺寸行(值非法时回落 A4)
+function syncDocTypeUI() {
+  const sel = $('docType');
+  if (![...sel.options].some(o=>o.value===S.docType)) S.docType = 'A4';
+  sel.value = S.docType;
+  $('docCustomRow').style.display = S.docType==='custom' ? 'flex' : 'none';
+  $('docW').value = S.docW || '';
+  $('docH').value = S.docH || '';
+}
+
+async function loadAnnos() {
+  try {
+    const r = await fetch('/api/annos').then(r=>r.json());
+    S.annos = r.annos || {};
+    for (const [id, a] of Object.entries(S.annos)) {
+      if (a.done) S.done.add(id);
+      if (a.ocrText) S.ocrTexts[id] = a.ocrText;
+    }
+  } catch(e) { console.warn('annos load fail', e); }
+}
+
+// 保存单张图标注到服务端(annotations.json)
+function persistAnno(extra={}) {
+  if (S.cur<0) return;
+  const id = S.images[S.cur].id;
+  const body = {
+    id,
+    corners: S.corners.map(c=>[c.x,c.y]),
+    edges: S.edges ? Object.fromEntries(['top','right','bottom','left']
+      .map(k=>[k, S.edges[k].map(p=>[p.x,p.y])])) : null,
+    mode: S.mode, pads: S.pads, style: S.style, rot: S.rot,
+    docType: S.docType, docW: S.docW, docH: S.docH,
+    label: $('label').value || id,
+    done: S.done.has(id),
+    ...extra,
+  };
+  fetch('/api/anno', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)}).catch(()=>{});
+}
+
+async function reloadImages(selectFirst=false) {
+  const r = await fetch('/api/images').then(r=>r.json());
+  S.images = r.images;
+  const sb = $('sidebar');
+  sb.querySelectorAll('.thumb').forEach(t=>t.remove());
+  for (const im of S.images) {
+    const d = document.createElement('div');
+    d.className = 'thumb'; d.dataset.id = im.id;
+    d.innerHTML = `<img src="/api/image/${im.id}?w=120"><div class="done" style="display:none">✓</div>`;
+    if (S.done.has(im.id)) d.querySelector('.done').style.display = 'block';
+    d.onclick = () => selectImage(S.images.findIndex(x=>x.id===im.id));
+    sb.appendChild(d);
+  }
+  if (S.images.length && (selectFirst || S.cur<0)) selectImage(0);
+}
+
+async function refreshSaveDir() {
+  try {
+    const c = await fetch('/api/config').then(r=>r.json());
+    $('saveDir').textContent = c.last_pdf_dir || '导出时选择…';
+    $('saveDir').title = c.last_pdf_dir || '';
+    if (c.export) S.exportCfg = c.export;   // 上次导出设置(模式/纸张/边距), 预填
+  } catch(e) {}
+}
+
+// PDF 导出记忆目录: 原生目录选择对话框(后端 osascript), 下次导出默认打开这里
+$('btnChooseDir').onclick = async ()=>{
+  status('等待选择目录 …');
+  try {
+    const r = await fetch('/api/choose_dir', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'}).then(r=>r.json());
+    $('saveDir').textContent = r.last_pdf_dir || '';
+    $('saveDir').title = r.last_pdf_dir || '';
+    status(`PDF 将优先导出到: ${r.last_pdf_dir}`, 'ok');
+  } catch(e){ status('选择目录失败: '+e, 'err'); }
+};
+
+// 添加照片: 原生文件选择对话框(多选)
+$('btnAdd').onclick = async ()=>{
+  status('等待选择照片 …');
+  try {
+    const r = await fetch('/api/add_photos', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'}).then(r=>r.json());
+    const n = (r.added||[]).length;
+    if (n) { await reloadImages(true); }
+    status(n ? `已添加 ${n} 张照片` : '未选择照片', n?'ok':'');
+  } catch(e){ status('添加照片失败: '+e, 'err'); }
+};
+
+async function selectImage(i) {
+  if (i<0) return;
+  // 离开当前图前, 把标注(含未保存的微调)落盘 — 切回来/重启都能恢复
+  if (S.cur>=0 && S.corners.length===4) persistAnno();
+  const gen = ++loadGen;               // 世代守卫: 快速切图时丢弃旧图的异步回调
+  S.cur = i;
+  S.undoStack = [];                    // 撤销栈按图隔离
+  S.corners = []; S.edges = null; S.dragging = null;  // 清旧选区, 防跨图残留
+  draw();
+  const im0 = S.images[i];
+  // 恢复该图的旋转记忆
+  S.rot = S.rots[im0.id] || 0;
+  $('rotToggle').querySelectorAll('button').forEach(b=>
+    b.classList.toggle('on', +b.dataset.r === S.rot));
+  // 文档类型默认 A4; 该图有持久化标注则由下方 applyAnno 覆盖
+  S.docType = 'A4'; S.docW = null; S.docH = null; syncDocTypeUI();
+  document.querySelectorAll('.thumb').forEach((t,j)=>t.classList.toggle('active', j===i));
+  status(`加载 ${im0.name} …`);
+  const im = S.images[i];
+  await new Promise((res,rej)=>{
+    S.img = new Image();
+    S.img.onload = res; S.img.onerror = rej;
+    S.img.src = `/api/image/${im.id}?w=2200`;
+  });
+  if (gen !== loadGen) return;         // 已切到其他图, 丢弃本图回调
+  // 坐标规范: S.corners/S.edges 一律存原图全分辨率坐标; 显示时经 k 换算
+  S.fullW = im.w; S.fullH = im.h;
+  S.k = im.w / S.img.width;
+  fitView();
+  // 有持久化标注 -> 直接恢复(不重跑检测); 没有才自动检测
+  const a = S.annos[im.id];
+  if (a && a.corners && a.corners.length===4) {
+    applyAnno(a);
+    status(`已恢复上次的提取结果 — 可微调后重新保存`, 'ok');
+  } else {
+    await autoDetect(gen);
+  }
+}
+
+// 应用一份服务端标注到当前界面状态
+function applyAnno(a) {
+  setCorners(a.corners, a.edges);
+  S.mode = a.mode || 'corner';
+  $('modeToggle').querySelectorAll('button').forEach(b=>
+    b.classList.toggle('on', b.dataset.m===S.mode));
+  $('modeDesc').textContent = S.mode==='corner'?'拖动四个角点框住文档':'拖动 ● 微调边缘弯曲(端点随角点)';
+  S.style = a.style || 'color';
+  $('styleToggle').querySelectorAll('button').forEach(b=>
+    b.classList.toggle('on', b.dataset.s===S.style));
+  if (typeof a.rot === 'number') {
+    S.rot = a.rot; S.rots[S.images[S.cur].id] = a.rot;
+    $('rotToggle').querySelectorAll('button').forEach(b=>
+      b.classList.toggle('on', +b.dataset.r===S.rot));
+  }
+  if (a.pads) {
+    // 兼容两代存储单位: 旧 annotations 存分数(0.02), persistAnno 存百分数(2)。
+    // 阈值 0.155(滑杆最小步进 0.5 的一半上取): 分数最大 0.15, 百分数最小 0.5
+    const cv = v => typeof v === 'number' && v < 0.155 ? v*100 : v;
+    S.pads = {t:cv(a.pads.t), b:cv(a.pads.b), l:cv(a.pads.l), r:cv(a.pads.r)};
+    for (const [k,id] of [['t','padT'],['b','padB'],['l','padL'],['r','padR']]) {
+      $(id).value = S.pads[k];
+      $(id+'v').textContent = S.pads[k]+'%';
+    }
+  }
+  if (a.label) $('label').value = a.label;
+  if (a.docType) {
+    S.docType = a.docType; S.docW = a.docW || null; S.docH = a.docH || null;
+    syncDocTypeUI();
+  }
+}
+let loadGen = 0;
+
+function fitView() {
+  const r = cv.getBoundingClientRect();
+  const pad = 40;
+  S.view.scale = Math.min((r.width-pad*2)/S.img.width, (r.height-pad*2)/S.img.height);
+  S.view.x = (r.width - S.img.width*S.view.scale)/2;
+  S.view.y = (r.height - S.img.height*S.view.scale)/2;
+  draw(); updateViewBar();
+}
+
+// ---------- 视图工具条 ----------
+function centerAt100(scale) {   // 以画布中心为锚点缩放到指定比例
+  const r = cv.getBoundingClientRect();
+  zoomAt(r.width/2, r.height/2, scale/S.view.scale);
+}
+$('vbFit').onclick = ()=> fitView();
+$('vbZoomIn').onclick = ()=> centerAt100(S.view.scale*1.3);
+$('vbZoomOut').onclick = ()=> centerAt100(S.view.scale/1.3);
+$('vb100').onclick = ()=> centerAt100(1);
+
+async function autoDetect(gen) {
+  if (S.cur<0) return;
+  status('自动检测中 …');
+  try {
+    const det = await fetch('/api/detect', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id: S.images[S.cur].id})}).then(r=>r.json());
+    if (gen !== undefined && gen !== loadGen) return;  // 响应属于旧图, 丢弃
+    setCorners(det.corners, det.edges);
+    status(`检测完成 (${det.mode}) — 请微调轮廓`, 'ok');
+  } catch(e) { status('检测失败: '+e, 'err'); }
+}
+
+function setCorners(corners, edges) {
+  S.corners = corners.map(c=>({x:c[0], y:c[1]}));
+  if (edges) {
+    S.edges = {};
+    for (const k of ['top','right','bottom','left'])
+      S.edges[k] = edges[k].map(p=>({x:p[0], y:p[1]}));
+  } else {
+    // 直线初值: 每边 5 控制点
+    const [TL,TR,BR,BL] = S.corners;
+    const lerp = (a,b,t)=>({x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t});
+    S.edges = {
+      top:    [0,.25,.5,.75,1].map(t=>lerp(TL,TR,t)),
+      right:  [0,.25,.5,.75,1].map(t=>lerp(TR,BR,t)),
+      bottom: [0,.25,.5,.75,1].map(t=>lerp(BL,BR,t)),
+      left:   [0,.25,.5,.75,1].map(t=>lerp(TL,BL,t)),
+    };
+  }
+  syncEdgeEnds();
+  requestPreview();
+  draw();
+}
+
+// 角点动 -> 相邻边整体跟随: 端点对齐新角点, 内部控制点按端点位移加权平移.
+// 只动端点会让内部控制点留在旧位置, Catmull-Rom 在新旧端点间回折,
+// Coons 映射在回折区来回采样 -> 预览出现选区外的"镜像环".
+function syncEdgeEnds() {
+  const [TL,TR,BR,BL] = S.corners;
+  const move = (edge, a, b) => {
+    const pts = S.edges[edge];
+    const oldA = {...pts[0]}, oldB = {...pts[pts.length-1]};
+    const n = pts.length - 1;
+    for (let i = 0; i <= n; i++) {
+      const wB = i / n;              // 0=首端, 1=尾端
+      const dx = (a.x - oldA.x) * (1 - wB) + (b.x - oldB.x) * wB;
+      const dy = (a.y - oldA.y) * (1 - wB) + (b.y - oldB.y) * wB;
+      pts[i] = {x: pts[i].x + dx, y: pts[i].y + dy};
+    }
+    // 端点精确对齐(消除浮点残差)
+    pts[0] = {...a}; pts[n] = {...b};
+  };
+  move('top', TL, TR); move('right', TR, BR);
+  move('bottom', BL, BR); move('left', TL, BL);
+}
+
+// 角点模式下的直线四边形边(与曲线层互不干扰)
+function straightEdges() {
+  const [TL,TR,BR,BL] = S.corners;
+  const lerp = (a,b,t)=>({x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t});
+  const ts = [0,.25,.5,.75,1];
+  return {
+    top:    ts.map(t=>lerp(TL,TR,t)),
+    right:  ts.map(t=>lerp(TR,BR,t)),
+    bottom: ts.map(t=>lerp(BL,BR,t)),
+    left:   ts.map(t=>lerp(TL,BL,t)),
+  };
+}
+// 当前生效的边: 角点模式=直线, 边缘模式=曲线
+const activeEdges = ()=> S.mode==='corner' ? straightEdges() : S.edges;
+
+// ---------- 渲染 ----------
+function resize() {
+  const r = cv.getBoundingClientRect();
+  cv.width = r.width*devicePixelRatio; cv.height = r.height*devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  draw();
+}
+new ResizeObserver(resize).observe(cv);
+
+// 原图坐标 <-> 屏幕坐标 (显示图缩放 scale × 原图/显示图系数 k)
+const w2s = p => ({x: S.view.x + p.x/S.k*S.view.scale, y: S.view.y + p.y/S.k*S.view.scale});
+const s2w = p => ({x: (p.x-S.view.x)/S.view.scale*S.k, y: (p.y-S.view.y)/S.view.scale*S.k});
+
+function catmullRom(pts, per=24) {
+  if (pts.length<2) return pts;
+  if (pts.length===2) { const out=[]; for(let i=0;i<=per;i++){const t=i/per;
+    out.push({x:pts[0].x+(pts[1].x-pts[0].x)*t, y:pts[0].y+(pts[1].y-pts[0].y)*t});} return out; }
+  const P=[pts[0],...pts,pts[pts.length-1]];
+  const out=[];
+  for(let i=0;i<P.length-3;i++){
+    const [p0,p1,p2,p3]=[P[i],P[i+1],P[i+2],P[i+3]];
+    for(let j=0;j<per;j++){ const t=j/per,t2=t*t,t3=t2*t;
+      out.push({
+        x:.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y:.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3)});
+    }
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+
+function draw() {
+  if (!S.img) return;
+  const r = cv.getBoundingClientRect();
+  ctx.clearRect(0,0,r.width,r.height);
+  // 背景图
+  ctx.save();
+  ctx.translate(S.view.x, S.view.y); ctx.scale(S.view.scale, S.view.scale);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(S.img, 0, 0);
+  ctx.restore();
+  if (!S.corners.length) return;
+
+  // pad 外扩轮廓(虚线): 沿角点对角线向外推
+  const padPx = (S.pads.t+S.pads.b)/2 * S.img.height * 0 + 0; // pad 只作用于输出,画布上用淡色区域表达
+  // 填充选中区
+  const path = edgePath();
+  ctx.save();
+  ctx.fillStyle = 'rgba(76,194,255,.14)';
+  ctx.fill(path);
+  ctx.strokeStyle = '#4cc2ff'; ctx.lineWidth = 2.5; ctx.stroke(path);
+  ctx.restore();
+
+  // 控制点
+  if (S.mode==='corner') {
+    for (const c of S.corners) { const p=w2s(c);
+      ctx.fillStyle='#ffd60a'; ctx.strokeStyle='#000'; ctx.lineWidth=2;
+      ctx.fillRect(p.x-7,p.y-7,14,14); ctx.strokeRect(p.x-7,p.y-7,14,14); }
+  } else {
+    for (const k of ['top','right','bottom','left']) {
+      S.edges[k].forEach((p,i)=>{
+        if (i===0 || i===S.edges[k].length-1) return; // 端点即角点
+        const s=w2s(p);
+        ctx.beginPath(); ctx.arc(s.x,s.y,6.5,0,Math.PI*2);
+        ctx.fillStyle='#ffd60a'; ctx.fill();
+        ctx.strokeStyle='#000'; ctx.lineWidth=2; ctx.stroke();
+      });
+    }
+    // 角点也显示(小)
+    for (const c of S.corners) { const p=w2s(c);
+      ctx.strokeStyle='#ffd60a'; ctx.lineWidth=2.5;
+      ctx.strokeRect(p.x-6,p.y-6,12,12); }
+  }
+  drawLoupe();
+}
+
+// ---------- 拖拽放大镜: 精确调整角点/边缘点 ----------
+const LOUPE = { SIZE: 216, ZOOM: 3 };  // 视窗 CSS 尺寸 / 相对显示图的放大倍数
+
+function relatedEdges(drag) {  // 与拖拽手柄相邻的边(角点=两条, 边点=所在边)
+  const E = activeEdges();
+  if (drag.type === 'edge') return [catmullRom(E[drag.edge])];
+  const m = {0:['top','left'], 1:['top','right'], 2:['right','bottom'], 3:['bottom','left']}[drag.i];
+  return [catmullRom(E[m[0]]), catmullRom(E[m[1]])];
+}
+
+function drawLoupe() {
+  if (!S.dragging || !S.img) return;
+  const isCorner = S.dragging.type === 'corner';
+  const p = isCorner ? S.corners[S.dragging.i]
+                     : S.edges[S.dragging.edge][S.dragging.i];
+  const sp = w2s(p);                       // 手柄屏幕位置
+  const r = cv.getBoundingClientRect();
+  const SIZE = LOUPE.SIZE, Z = LOUPE.ZOOM, half = SIZE/(2*Z);
+  const dp = { x: p.x/S.k, y: p.y/S.k };   // 显示图坐标
+
+  // 视窗位置: 手柄右上偏移, 靠近画布上/右缘时翻转
+  let lx = sp.x + 28, ly = sp.y - SIZE - 28;
+  if (ly < 6) ly = sp.y + 28;
+  if (lx + SIZE > r.width - 6) lx = Math.max(6, sp.x - SIZE - 28);
+  if (ly + SIZE > r.height - 6) ly = Math.max(6, r.height - SIZE - 6);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(lx+SIZE/2, ly+SIZE/2, SIZE/2, 0, Math.PI*2);
+  ctx.fillStyle = '#101114'; ctx.fill();
+
+  ctx.save();
+  ctx.clip();                              // 圆形裁剪
+  ctx.imageSmoothingEnabled = true;
+  // 源窗口越界钳制(手柄拖到图边缘时保持对位)
+  const sx0 = Math.max(0, dp.x-half), sy0 = Math.max(0, dp.y-half);
+  const sx1 = Math.min(S.img.width, dp.x+half), sy1 = Math.min(S.img.height, dp.y+half);
+  if (sx1 > sx0 && sy1 > sy0) {
+    ctx.drawImage(S.img, sx0, sy0, sx1-sx0, sy1-sy0,
+      lx + (sx0-(dp.x-half))*Z, ly + (sy0-(dp.y-half))*Z, (sx1-sx0)*Z, (sy1-sy0)*Z);
+  }
+  // 相邻边曲线(变换到显示图坐标系, 线宽折算回屏幕常量)
+  ctx.translate(lx, ly); ctx.scale(Z, Z); ctx.translate(-dp.x, -dp.y);
+  ctx.lineWidth = 1.5/Z;
+  ctx.strokeStyle = 'rgba(76,194,255,.95)';
+  for (const dense of relatedEdges(S.dragging)) {
+    ctx.beginPath();
+    dense.forEach((q, i) => { const x = q.x/S.k, y = q.y/S.k;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  }
+  ctx.restore();                           // 出裁剪/变换
+
+  // 准星: 带缺口十字 + 中心圆(精确到像素)
+  const cx = lx+SIZE/2, cy = ly+SIZE/2;
+  ctx.strokeStyle = '#ffd60a'; ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(cx-SIZE/2+6, cy); ctx.lineTo(cx-10, cy);
+  ctx.moveTo(cx+10, cy);   ctx.lineTo(cx+SIZE/2-6, cy);
+  ctx.moveTo(cx, cy-SIZE/2+6); ctx.lineTo(cx, cy-10);
+  ctx.moveTo(cx, cy+10);   ctx.lineTo(cx, cy+SIZE/2-6);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, Math.PI*2); ctx.stroke();
+  // 原图全分辨率坐标
+  ctx.fillStyle = '#ffd60a'; ctx.font = '11px -apple-system,"PingFang SC",sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`(${Math.round(p.x)}, ${Math.round(p.y)})`, cx, ly+SIZE-10);
+
+  // 外框
+  ctx.beginPath();
+  ctx.arc(lx+SIZE/2, ly+SIZE/2, SIZE/2, 0, Math.PI*2);
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(76,194,255,.9)';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function edgePath() {
+  // 单条连续子路径: TL→(top)→TR→(right)→BR→(bottom反向)→BL→(left反向)→TL。
+  // 不要每条边 moveTo 开新子路径再 closePath — closePath 只作用于最后一个子路径,
+  // 会在左边曲线外多拉一条 TL→BL 直线弦(显示为第二条轮廓线)。
+  const E = activeEdges();
+  const p = new Path2D();
+  const rings = [catmullRom(E.top), catmullRom(E.right),
+                 catmullRom([...E.bottom].reverse()), catmullRom([...E.left].reverse())];
+  p.moveTo(w2s(rings[0][0]).x, w2s(rings[0][0]).y);
+  for (const dense of rings)
+    for (const pt of dense) p.lineTo(w2s(pt).x, w2s(pt).y);
+  p.closePath();  // 起点=终点(TL), 零长度, 仅形式闭合
+  return p;
+}
+
+// ---------- 交互 ----------
+cv.addEventListener('pointerdown', e=>{
+  if (!S.corners.length) return;
+  cv.setPointerCapture(e.pointerId);
+  const m = {x:e.offsetX, y:e.offsetY};
+  if (S.spacePan || e.button===1) { S.panLast=m; return; }
+  const hitR = 14;
+  let hit = null;
+  if (S.mode==='corner') {
+    for (let i=0;i<4;i++) { const s=w2s(S.corners[i]);
+      if (Math.hypot(s.x-m.x,s.y-m.y)<hitR) { hit={type:'corner',i}; break; } }
+  } else {
+    for (const k of ['top','right','bottom','left'])
+      S.edges[k].forEach((p,i)=>{
+        if (hit || i===0||i===S.edges[k].length-1) return;
+        const s=w2s(p);
+        if (Math.hypot(s.x-m.x,s.y-m.y)<hitR) hit={type:'edge',edge:k,i};
+      });
+    if (!hit)
+      for (let i=0;i<4;i++) { const s=w2s(S.corners[i]);
+        if (Math.hypot(s.x-m.x,s.y-m.y)<hitR) { hit={type:'corner',i}; break; } }
+  }
+  if (hit) {
+    // 拖拽前快照入撤销栈(深拷贝) — Ctrl+Z 可回退这次拖拽
+    S.undoStack.push({
+      corners: S.corners.map(c=>({x:c.x,y:c.y})),
+      edges: S.edges ? Object.fromEntries(['top','right','bottom','left']
+        .map(k=>[k, S.edges[k].map(p=>({x:p.x,y:p.y}))])) : null,
+      mode: S.mode,
+    });
+    if (S.undoStack.length > 50) S.undoStack.shift();
+    S.dragging = hit;
+  }
+});
+cv.addEventListener('pointermove', e=>{
+  const m = {x:e.offsetX, y:e.offsetY};
+  if (S.panLast) { S.view.x+=m.x-S.panLast.x; S.view.y+=m.y-S.panLast.y; S.panLast=m; draw(); return; }
+  if (!S.dragging) {
+    // hover 光标
+    const hit = hitTest(m);
+    cv.style.cursor = hit? 'grab' : (S.spacePan?'grab':'crosshair');
+    return;
+  }
+  const w = s2w(m);
+  if (S.dragging.type==='corner') {
+    S.corners[S.dragging.i] = w; syncEdgeEnds();
+  } else {
+    S.edges[S.dragging.edge][S.dragging.i] = w;
+  }
+  requestPreview();
+  draw();
+});
+const endDrag = ()=>{ if (S.dragging) scheduleResave();   // 有拖拽才重生成, 纯点击不触发
+  S.dragging=null; S.panLast=null; draw(); };  // draw 清除放大镜
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+function hitTest(m) {
+  if (!S.corners.length) return null;
+  const hitR = 14;
+  for (let i=0;i<4;i++) { const s=w2s(S.corners[i]);
+    if (Math.hypot(s.x-m.x,s.y-m.y)<hitR) return 'corner'; }
+  if (S.mode==='edge')
+    for (const k of ['top','right','bottom','left'])
+      for (let i=1;i<S.edges[k].length-1;i++) { const s=w2s(S.edges[k][i]);
+        if (Math.hypot(s.x-m.x,s.y-m.y)<hitR) return 'edge'; }
+  return null;
+}
+
+// ---------- 视图缩放(锚点正确) ----------
+function zoomAt(sx, sy, factor) {
+  // 锚定(sx,sy)下的世界点: 记下光标处的世界坐标, 调 scale 后补偿 view 使该世界点仍在光标下
+  const w = s2w({x:sx, y:sy});
+  S.view.scale = Math.max(.02, Math.min(8, S.view.scale*factor));
+  const s2 = w2s(w);
+  S.view.x += sx - s2.x;
+  S.view.y += sy - s2.y;
+  draw(); updateViewBar();
+}
+function updateViewBar() { $('vbZoom').textContent = Math.round(S.view.scale*100)+'%'; }
+
+cv.addEventListener('wheel', e=>{
+  e.preventDefault();
+  zoomAt(e.offsetX, e.offsetY, e.deltaY<0? 1.12 : 1/1.12);
+}, {passive:false});
+
+window.addEventListener('keydown', e=>{
+  if (e.code==='Space') { S.spacePan=true; cv.style.cursor='grab'; e.preventDefault(); return; }
+  // 视图快捷键 (输入框内不拦截)
+  if (/INPUT|TEXTAREA/.test(document.activeElement?.tagName || '')) return;
+  // 弹窗打开时 Enter=默认按钮 / Esc=关闭
+  if ($('modal').classList.contains('open')) {
+    if (e.key==='Escape') { $('modal').classList.remove('open'); return; }
+    const def = $('modal').querySelector('.m-btns .primary');
+    if (e.key==='Enter' && def) def.click();
+    return;
+  }
+  // Ctrl/Cmd+Z: 撤销上次拖拽
+  if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z') {
+    if (S.undoStack.length) {
+      const snap = S.undoStack.pop();
+      S.corners = snap.corners;
+      S.edges = snap.edges;
+      S.mode = snap.mode;
+      $('modeToggle').querySelectorAll('button').forEach(b=>
+        b.classList.toggle('on', b.dataset.m===S.mode));
+      $('modeDesc').textContent = S.mode==='corner'?'拖动四个角点框住文档':'拖动 ● 微调边缘弯曲(端点随角点)';
+      requestPreview(); draw();
+      status('已撤销上次调整');
+    } else status('没有可撤销的操作');
+    e.preventDefault();
+    return;
+  }
+  const r = cv.getBoundingClientRect();
+  if (e.key==='f' || e.key==='F') fitView();
+  else if (e.key==='1') centerAt100(1);
+  else if (e.key==='+' || e.key==='=') centerAt100(S.view.scale*1.3);
+  else if (e.key==='-') centerAt100(S.view.scale/1.3);
+});
+window.addEventListener('keyup', e=>{ if (e.code==='Space'){ S.spacePan=false; cv.style.cursor='crosshair'; }});
+
+// ---------- 预览 ----------
+let prevTimer = null;
+function requestPreview() {
+  S.dirty = true;
+  clearTimeout(prevTimer);
+  prevTimer = setTimeout(refreshPreview, 300); // 防抖
+}
+async function refreshPreview() {
+  if (!S.dirty || S.cur<0 || !S.corners.length) return;
+  S.dirty = false;
+  const body = payload(900);
+  const mySeq = ++previewSeq;          // 乱序守卫: 旧响应后到时丢弃
+  try {
+    const r = await fetch('/api/preview', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+    if (mySeq !== previewSeq) return;  // 已有更新请求发出, 本响应过期
+    const blob = await r.blob();
+    if (mySeq !== previewSeq) return;
+    const url = URL.createObjectURL(blob);
+    const old = lastPreviewUrl;
+    $('preview').src = url;
+    if (old) URL.revokeObjectURL(old);  // 防 blob 泄漏
+    lastPreviewUrl = url;
+  } catch(e) {
+    S.dirty = true;                     // 失败可重试, 不静默卡旧帧
+  }
+}
+let previewSeq = 0, lastPreviewUrl = null;
+
+function payload(out_w) {
+  const cs = S.corners.map(c=>[c.x,c.y]);
+  const es = {};
+  const E = activeEdges();  // 角点模式发直线边, 边缘模式发曲线边
+  for (const k of ['top','right','bottom','left']) es[k]=E[k].map(p=>[p.x,p.y]);
+  return {id:S.images[S.cur].id, corners:cs, edges:es,
+          pads:{t:S.pads.t/100,b:S.pads.b/100,l:S.pads.l/100,r:S.pads.r/100},
+          mode: S.style==='bw'?'gray':S.style, out_w, rot:S.rot,
+          mode_src: S.mode, style: S.style,
+          docType: S.docType, docW: S.docW, docH: S.docH};
+}
+
+// ---------- 保存 / 导出 / 撤销 ----------
+// 生成并落盘当前页 — "本页就绪"与已保存页参数变更后的静默重生成共用。
+// 缓存页必须与标注同源: 导出按标注的 docType 选盒子、按缓存页文件排内容,
+// 两者脱节会把同一页放进错误大小的盒(户口本两页一大一小即此因)。
+async function doSavePage({ocr=false}={}) {
+  const imgId = S.images[S.cur].id;
+  const body = payload(2400);
+  body.ocr = ocr;
+  body.label = $('label').value || imgId;
+  body.index = S.cur;   // 页号 = 图片在侧栏的位置(稳定), 而非会话内计数(刷新会清零导致同图重复落盘)
+  const r = await fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)}).then(r=>r.json());
+  if (r.error) throw r.error;
+  S.done.add(imgId);
+  const t = document.querySelector(`.thumb[data-id="${imgId}"] .done`);
+  if (t) t.style.display='block';
+  // 同步到本地标注缓存(服务端 /api/save 已落盘, 这里保持 S.annos 一致)
+  S.annos[imgId] = {
+    ...(S.annos[imgId]||{}),
+    corners: body.corners, edges: body.edges, mode: S.mode, pads: S.pads,
+    style: S.style, rot: S.rot, label: body.label,
+    docType: S.docType, docW: S.docW, docH: S.docH, done: true,
+  };
+  return r;
+}
+
+// 已保存页的 参数/选区 变更 -> 防抖静默重生成, 保证缓存页始终反映当前设置
+let resaveTimer = null;
+function scheduleResave() {
+  if (S.cur<0 || !S.done.has(S.images[S.cur].id)) return;
+  clearTimeout(resaveTimer);
+  resaveTimer = setTimeout(async ()=>{
+    const gen = loadGen;
+    status('参数已修改, 重新生成本页 …');
+    try {
+      await doSavePage();
+      if (gen === loadGen) status('本页已按新参数重新生成', 'ok');
+    } catch(e) {
+      if (gen === loadGen) status('重新生成失败: '+e, 'err');
+    }
+  }, 900);
+}
+
+$('btnSave').onclick = async ()=>{
+  if (S.cur<0) return;
+  status('处理本页 …');
+  try {
+    const r = await doSavePage({ocr: $('cbOcr').checked});
+    if (r.ocr_text) S.ocrTexts[S.images[S.cur].id] = r.ocr_text;
+    const ocrInfo = r.ocr_text ? `<div class="m-sub">OCR 提取 ${r.ocr_text.length} 字符</div>` : '';
+    showModal({
+      title: '✓ 本页已就绪',
+      html: `<div>第 ${S.cur+1} 页已处理完成。</div>${ocrInfo}
+             <div class="m-sub">导出 PDF 时统一保存到记忆位置</div>`,
+      buttons: r.ocr_text
+        ? [{text:'查看 OCR 文本', act:()=>{ showOcrModal(S.images[S.cur].id); return false; }},
+           {text:'下一页 →', primary:true}]
+        : [{text:'下一页 →', primary:true}],
+      onAct: ()=>{  // 默认动作: 跳下一张未完成页
+        const next = S.images.findIndex((im,j)=>j>S.cur && !S.done.has(im.id));
+        if (next>0) selectImage(next);
+      },
+    });
+  } catch(e){ showModal({title:'处理失败', html:String(e), kind:'err'}); }
+};
+
+// 撤销本页保存: 清缓存页文件 + done/OCR 状态, 标注保留可重新微调再保存
+$('btnUnsave').onclick = async ()=>{
+  if (S.cur<0) return;
+  const id = S.images[S.cur].id;
+  if (!S.done.has(id)) { showModal({title:'提示', html:'本页尚未保存过'}); return; }
+  showModal({
+    title: '撤销本页保存?',
+    html: '将删除已生成的扫描页(缓存), 角点/边缘标注保留, 可重新调整后再保存。',
+    buttons: [
+      {text:'取消'},
+      {text:'确认撤销', primary:true, act: async ()=>{
+        try {
+          const r = await fetch('/api/unsave', {method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({id, label: $('label').value || id})}).then(r=>r.json());
+          if (r.error) throw r.error;
+          S.done.delete(id);
+          delete S.ocrTexts[id];
+          const a = S.annos[id]; if (a) { a.done=false; delete a.ocrText; }
+          const t = document.querySelector(`.thumb[data-id="${id}"] .done`);
+          if (t) t.style.display='none';
+          showModal({title:'已撤销', html:`已移除 ${r.removed} 个缓存页文件, 本页可重新提取。`});
+        } catch(e){ showModal({title:'撤销失败', html:String(e), kind:'err'}); }
+        return true;  // 关闭确认框(动作自管弹窗)
+      }},
+    ],
+  });
+};
+
+// OCR 文本查看弹窗(选中文字可复制)
+function showOcrModal(id) {
+  const txt = S.ocrTexts[id] || '(无 OCR 文本)';
+  showModal({
+    title: 'OCR 文本',
+    html: `<div class="m-ocr">${txt.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`,
+    buttons: [{text:'关闭', primary:true}],
+    wide: true,
+  });
+}
+
+// ---------- 导出 PDF: 模式与纸张配置弹窗 ----------
+// 逐页原尺寸: 每张扫描页各成一页, 页面大小=图片大小(原有行为)
+// 按纸张排版: 统一纸张(默认 A4), 每页扫描件独占一张纸, 按其"文档类型"
+//             实际尺寸 1:1 置于左上角(模拟复印件), 排不满留白, 四周边距防裁切
+$('btnPdf').onclick = async ()=>{
+  if (!S.done.size) {
+    showModal({title:'提示', html:'还没有已保存的扫描页 — 请先对照片点"✓ 本页就绪"。'});
+    return;
+  }
+  // 拉最新配置: 上次的模式/纸张/目录/文件名默认继承
+  const cfg = await fetch('/api/config').then(r=>r.json()).catch(()=>({}));
+  const ex = Object.assign({}, S.exportCfg, cfg.export);
+  const mode = ex.mode || 'layout';   // 默认按纸张排版(复印件效果); 逐页原尺寸需显式选择
+  const paper = ex.paper || 'A4';
+  const orient = ex.orient || 'p';
+  // 已保存页的类型汇总(排版模式预览用): 未设置类型的页导出时按 A4
+  const donePages = S.images.filter(im => S.done.has(im.id));
+  const docName = id => id === 'custom' ? '自定义'
+    : (S.presets.docs||[]).find(x=>x.id===id)?.name || '未设置(按A4)';
+  const counts = {};
+  for (const im of donePages) {
+    const t = S.annos[im.id]?.docType;
+    counts[t ? docName(t) : '未设置(按A4)'] = (counts[t ? docName(t) : '未设置(按A4)']||0)+1;
+  }
+  const summary = Object.entries(counts).map(([k,n])=>`${k}×${n}`).join(' · ');
+  showModal({
+    title: '导出 PDF', wide: true,
+    html: `
+      <div class="row"><label>模式</label>
+        <div class="toggle" style="flex:1" id="exMode">
+          <button data-m="image">逐页原尺寸</button>
+          <button data-m="layout">按纸张排版</button>
+        </div></div>
+      <div class="m-sub" id="exModeDesc" style="margin:2px 0 8px;color:var(--acc2)"></div>
+      <div id="exLayout">
+        <div class="row"><label>本次导出</label>
+          <span style="flex:1;font-size:12px">共 ${donePages.length} 页${summary ? ': '+summary : ''}</span></div>
+        <div class="row"><label>纸张</label>
+          <select id="exPaper" style="flex:1"></select>
+          <div class="toggle" style="flex:0 0 auto" id="exOrient">
+            <button data-o="p">纵</button><button data-o="l">横</button>
+          </div></div>
+        <div class="row" id="exPaperCustomRow" style="display:none"><label>尺寸mm</label>
+          <input id="exPaperW" type="number" min="50" max="2000" step="0.1" placeholder="210" style="flex:1">
+          <span style="color:#a9adb3">×</span>
+          <input id="exPaperH" type="number" min="50" max="2000" step="0.1" placeholder="297" style="flex:1"></div>
+        <div class="row"><label>页边距</label>
+          <input id="exMargin" type="number" min="0" max="50" step="1" style="flex:1" value="${ex.margin ?? 10}">
+          <span style="color:#a9adb3">mm</span></div>
+        <div class="m-sub" style="margin:2px 0 8px">模拟复印件效果: 每页扫描件独占一张纸, 按其"文档类型"的实际尺寸 1:1 放在纸张左上角(边距内), 排不满自然留白, 四周保留边距防止打印裁边。单项超出可打印区会等比缩小; A4 文档想 1:1 打到 A4 纸可把边距设为 0。</div>
+      </div>
+      <div class="row"><label>保存到</label>
+        <input id="exDir" type="text" placeholder="目录或完整路径, 默认上次位置" style="flex:1;background:#393c41;border:1px solid var(--line);border-radius:4px;color:var(--txt);padding:4px 6px;font-size:11px">
+        <button id="exDirBtn" title="选择目录" style="padding:4px 8px">📁…</button></div>
+      <div class="row"><label>文件名</label>
+        <input id="exName" type="text" style="flex:1;background:#393c41;border:1px solid var(--line);border-radius:4px;color:var(--txt);padding:4px 6px"></div>`,
+    buttons: [
+      {text:'取消'},
+      {text:'导出…', primary:true, act:()=>{
+        // 自定义纸张需先通过校验(返回 false 保持弹窗)
+        if ($('exMode').querySelector('.on')?.dataset.m === 'layout'
+            && $('exPaper').value === 'custom') {
+          const w = +$('exPaperW').value, h = +$('exPaperH').value;
+          if (!(w > 0 && h > 0)) {
+            showModal({title:'纸张尺寸无效', html:'请填写自定义纸张的宽和高(mm)', kind:'err'});
+            return false;
+          }
+        }
+        doExport();
+      }},
+    ],
+  });
+  // 预填(经 DOM 赋值避免转义): 目录/文件名继承上次导出, 文件名仅记忆用户改过的
+  const autoName = S.images[S.cur] ? `扫描件-${S.images[S.cur].id}` : '扫描件';
+  $('exName').value = ex.fname || autoName;
+  $('exDir').value = ex.dir || cfg.last_pdf_dir || '';
+  $('exDirBtn').onclick = async ()=>{
+    status('等待选择目录 …');
+    try {
+      const r = await fetch('/api/choose_dir', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:'{}'}).then(r=>r.json());
+      if (r.last_pdf_dir) $('exDir').value = r.last_pdf_dir;
+      $('modal').classList.add('open');   // 选目录的瞬间弹窗会失焦, 恢复显示
+    } catch(e){ status('选择目录失败: '+e, 'err'); }
+  };
+  // 纸张下拉: 预设 + 自定义
+  const psel = $('exPaper');
+  psel.innerHTML = '';
+  for (const p of (S.presets.papers||[])) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name; psel.appendChild(o);
+  }
+  const pc = document.createElement('option');
+  pc.value = 'custom'; pc.textContent = '自定义纸张…';
+  psel.appendChild(pc);
+  psel.value = (S.presets.papers||[]).some(p=>p.id===paper)
+    ? paper : (paper==='custom' ? 'custom' : 'A4');
+  const syncPaperRow = ()=>{
+    $('exPaperCustomRow').style.display = psel.value==='custom' ? 'flex' : 'none';
+  };
+  psel.onchange = syncPaperRow;
+  syncPaperRow();
+  if (paper==='custom') {
+    $('exPaperW').value = ex.paper_w || 210;
+    $('exPaperH').value = ex.paper_h || 297;
+  }
+  // 模式 / 方向 toggle 初值
+  const setToggle = (root, val)=>{
+    root.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.m===val || b.dataset.o===val));
+  };
+  setToggle($('exMode'), mode);
+  setToggle($('exOrient'), orient);
+  $('exLayout').style.display = mode==='layout' ? '' : 'none';
+  // 当前模式的直白说明 — 防止再选错模式(逐页原尺寸=图片铺满整页)
+  const MODE_DESC = {
+    image: '逐页原尺寸: 每页 = 扫描图片本身大小, 身份证等小证件会铺满整页',
+    layout: '按纸张排版: 每页扫描件独占一张纸, 按文档类型实际尺寸放纸张左上角(复印件效果)',
+  };
+  const syncModeDesc = ()=>{
+    $('exModeDesc').textContent = MODE_DESC[$('exMode').querySelector('.on')?.dataset.m || 'layout'];
+  };
+  syncModeDesc();
+  $('exMode').onclick = e=>{
+    const b = e.target.closest('button'); if (!b) return;
+    setToggle($('exMode'), b.dataset.m);
+    $('exLayout').style.display = b.dataset.m==='layout' ? '' : 'none';
+    syncModeDesc();
+  };
+  $('exOrient').onclick = e=>{
+    const b = e.target.closest('button'); if (!b) return;
+    setToggle($('exOrient'), b.dataset.o);
+  };
+};
+
+async function doExport(again) {
+  const m = $('exMode').querySelector('.on')?.dataset.m || 'image';
+  // 容错: 去引号/尾斜杠; 目录栏粘了完整 .pdf 路径时当场拆成 目录+文件名
+  let dir = $('exDir').value.trim().replace(/^["']+|["']+$/g, '').replace(/\/+$/, '');
+  let name = $('exName').value.trim() || '扫描件';
+  if (dir.toLowerCase().endsWith('.pdf')) {
+    const i = dir.lastIndexOf('/');
+    name = dir.slice(i + 1).replace(/\.pdf$/i, '');
+    dir = dir.slice(0, i);
+    $('exDir').value = dir;      // 回填, 成功提示里显示的就是真实去向
+    $('exName').value = name;
+  }
+  const body = { name };
+  if (dir) body.dir = dir;
+  if (again && again.overwrite) body.overwrite = 1;
+  // 只记忆用户改过的文件名(与自动默认相同则不记, 避免过期的图片名被继承)
+  const autoName = S.images[S.cur] ? `扫描件-${S.images[S.cur].id}` : '扫描件';
+  const base = name.replace(/\.pdf$/i, '');
+  if (base !== autoName) body.fname = base;
+  if (m === 'layout') {
+    body.mode = 'layout';
+    body.paper = $('exPaper').value;
+    if (body.paper === 'custom') {
+      body.paper_w = +$('exPaperW').value;
+      body.paper_h = +$('exPaperH').value;
+    }
+    body.orient = $('exOrient').querySelector('.on')?.dataset.o || 'p';
+    body.margin = +$('exMargin').value || 0;
+  }
+  status('正在导出 …');
+  try {
+    const r = await fetch('/api/pdf', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)}).then(r=>r.json());
+    if (r.exists) {   // 覆盖保护: 先确认再重发
+      showModal({
+        title: '文件已存在',
+        html: `<div class="m-path">${r.pdf}</div><div class="m-sub">已存在同名文件, 覆盖它?</div>`,
+        buttons: [
+          {text:'取消'},
+          {text:'覆盖导出', primary:true, act:()=>{ doExport({overwrite:true}); }},
+        ],
+      });
+      return;
+    }
+    if (r.error) throw r.error;
+    S.exportCfg = Object.assign(S.exportCfg||{},
+      {mode: m, dir: r.pdf.replace(/\/[^/]*$/, '')},
+      body.fname ? {fname: body.fname} : {});
+    refreshSaveDir();
+    showModal({
+      title: '✓ PDF 已导出',
+      html: `<div class="m-path">${r.pdf}</div><div class="m-sub">目录与文件名已记忆, 下次默认沿用</div>`,
+      buttons: [{text:'好', primary:true}],
+    });
+  } catch(e){ showModal({title:'PDF 导出失败', html:String(e), kind:'err'}); }
+}
+
+$('btnDetect').onclick = ()=>autoDetect();
+// 重置: 图片居中 80% 大小的四边形(四边各留 10%), 角点落在画面内便于拖拽
+$('btnReset').onclick = ()=>{
+  const w = S.fullW, h = S.fullH, m = 0.1;
+  setCorners([[w*m,h*m],[w*(1-m),h*m],[w*(1-m),h*(1-m)],[w*m,h*(1-m)]]);
+};
+
+// 模式切换
+$('modeToggle').onclick = e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  S.mode = b.dataset.m;
+  $('modeToggle').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  $('modeDesc').textContent = S.mode==='corner'?'拖动四个角点框住文档':'拖动 ● 微调边缘弯曲(端点随角点)';
+  requestPreview();  // 直线边/曲线边切换 → 预览同步
+  draw();
+};
+// 样式切换
+$('styleToggle').onclick = e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  S.style = b.dataset.s;
+  $('styleToggle').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  requestPreview();
+};
+// 旋转切换(每张图独立记忆)
+$('rotToggle').onclick = e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  S.rot = +b.dataset.r;
+  if (S.cur>=0) S.rots[S.images[S.cur].id] = S.rot;
+  $('rotToggle').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  requestPreview();
+  scheduleResave();
+};
+// 文档类型(扫描对象实际尺寸): 选择/自定义宽高, 随标注落盘
+$('docType').onchange = ()=>{
+  S.docType = $('docType').value;
+  if (S.docType==='custom' && !S.docW) { S.docW = 85.6; S.docH = 54; }  // 预填示例
+  syncDocTypeUI();
+  persistAnno();
+  scheduleResave();   // 已保存页改类型 -> 重新生成, 防止导出盒与缓存页脱节
+};
+const docDimChange = ()=>{
+  S.docW = +$('docW').value || null;
+  S.docH = +$('docH').value || null;
+  persistAnno();
+  scheduleResave();
+};
+$('docW').onchange = docDimChange;
+$('docH').onchange = docDimChange;
+$('label').onchange = ()=>{ persistAnno(); scheduleResave(); };
+// pad 滑杆
+for (const [k,id] of [['t','padT'],['b','padB'],['l','padL'],['r','padR']]) {
+  $(id).oninput = e=>{ S.pads[k] = +e.target.value;
+    $(id+'v').textContent = e.target.value+'%'; requestPreview(); scheduleResave(); };
+}
+
+// ---------- 预览灯箱 ----------
+const LB = { img:null, x:0, y:0, scale:1, pan:null };
+const lb = $('lightbox'), lbCv = $('lbCv'), lbCtx = lbCv.getContext('2d');
+
+function lbDraw() {
+  const r = lbCv.getBoundingClientRect();
+  lbCv.width = r.width*devicePixelRatio; lbCv.height = r.height*devicePixelRatio;
+  lbCtx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  lbCtx.clearRect(0,0,r.width,r.height);
+  if (!LB.img) return;
+  lbCtx.imageSmoothingEnabled = LB.scale < 3; // 高倍缩放时关平滑,看像素级细节
+  lbCtx.save();
+  lbCtx.translate(LB.x, LB.y); lbCtx.scale(LB.scale, LB.scale);
+  lbCtx.drawImage(LB.img, 0, 0);
+  lbCtx.restore();
+  $('lbZoomVal').textContent = Math.round(LB.scale*100)+'%';
+}
+
+function lbFit() {
+  if (!LB.img) return;
+  const r = lbCv.getBoundingClientRect(), pad = 30;
+  LB.scale = Math.min((r.width-pad*2)/LB.img.width, (r.height-pad*2)/LB.img.height, 4);
+  LB.x = (r.width - LB.img.width*LB.scale)/2;
+  LB.y = (r.height - LB.img.height*LB.scale)/2;
+  lbDraw();
+}
+
+function lbZoomAt(cx, cy, factor) {
+  const before = {x: (cx-LB.x)/LB.scale, y: (cy-LB.y)/LB.scale};
+  LB.scale = Math.max(.05, Math.min(16, LB.scale*factor));
+  LB.x = cx - before.x*LB.scale;
+  LB.y = cy - before.y*LB.scale;
+  lbDraw();
+}
+
+$('preview').addEventListener('click', ()=>{
+  const src = $('preview').src;
+  if (!src || !LB.img || LB.img.src !== src) {
+    LB.img = new Image();
+    LB.img.onload = lbFit;
+    LB.img.src = src;
+  } else lbFit();
+  lb.classList.add('open');
+  requestAnimationFrame(lbFit);
+});
+$('lbClose').onclick = ()=> lb.classList.remove('open');
+$('lbZoomIn').onclick = ()=>{ const r=lbCv.getBoundingClientRect();
+  lbZoomAt(r.width/2, r.height/2, 1.3); };
+$('lbZoomOut').onclick = ()=>{ const r=lbCv.getBoundingClientRect();
+  lbZoomAt(r.width/2, r.height/2, 1/1.3); };
+$('lbFit').onclick = lbFit;
+$('lb100').onclick = ()=>{ LB.scale = 1;
+  const r = lbCv.getBoundingClientRect();
+  LB.x = (r.width - LB.img.width)/2; LB.y = (r.height - LB.img.height)/2;
+  lbDraw(); };
+lb.addEventListener('click', e=>{ if (e.target===lbCv) return; });
+lb.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const r = lbCv.getBoundingClientRect();
+  lbZoomAt(e.clientX-r.left, e.clientY-r.top, e.deltaY<0? 1.15 : 1/1.15);
+}, {passive:false});
+lbCv.addEventListener('pointerdown', e=>{
+  lbCv.setPointerCapture(e.pointerId);
+  LB.pan = {x:e.clientX, y:e.clientY};
+});
+lbCv.addEventListener('pointermove', e=>{
+  if (!LB.pan) return;
+  LB.x += e.clientX-LB.pan.x; LB.y += e.clientY-LB.pan.y;
+  LB.pan = {x:e.clientX, y:e.clientY};
+  lbDraw();
+});
+const lbEnd = ()=> LB.pan = null;
+lbCv.addEventListener('pointerup', lbEnd);
+lbCv.addEventListener('pointercancel', lbEnd);
+lbCv.addEventListener('dblclick', lbFit);
+window.addEventListener('keydown', e=>{
+  if (e.key==='Escape') lb.classList.remove('open');
+});
+window.addEventListener('resize', ()=>{ if (lb.classList.contains('open')) lbFit(); });
+
+init();
+</script>
+</body>
+</html>

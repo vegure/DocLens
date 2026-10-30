@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>DocLens</string>
+    <key>CFBundleDisplayName</key><string>DocLens</string>
+    <key>CFBundleIdentifier</key><string>com.yulei.doclens</string>
+    <key>CFBundleVersion</key><string>1.0.0</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleExecutable</key><string>DocLens</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSSupportsAutomaticTermination</key><false/>
+    <key>NSSupportsSuddenTermination</key><false/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>用于弹出文件/目录选择对话框(扫描照片导入与保存位置选择)。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>导入照片进行文档扫描。</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>保存扫描结果到文稿文件夹。</string>
+</dict>
+</plist>
